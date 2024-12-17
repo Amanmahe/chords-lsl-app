@@ -1,53 +1,59 @@
-import { useState, useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/tauri"; // Import the invoke function
+"use client";
 
-const Home = () => {
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamData, setStreamData] = useState<string[]>([]); // Store streamed data
+import React, { useRef, useState } from 'react';
+import { core } from "@tauri-apps/api";
 
-  // Start the LSL stream
-  const startStreaming = async () => {
-    setIsStreaming(true);
-    await invoke("start_lsl_stream");
+const App = () => {
+  const [deviceConnected, setDeviceConnected] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [lslName, setLslName] = useState('UDL');
+  const portRef = useRef<unknown>(null); // Use unknown for now
+
+  const handleConnectDevice = async () => {
+    try {
+      // Request the backend to auto detect and connect to the device
+      const portName = await core.invoke('auto_detect_arduino') as string;  // Type assertion here
+      console.log(`Connected to device on port: ${portName}`);
+      portRef.current = portName;
+      setDeviceConnected(true);
+    } catch (error) {
+      console.error('Failed to connect to device:', error);
+    }
   };
 
-  // Stop the LSL stream
-  const stopStreaming = async () => {
-    setIsStreaming(false);
-    await invoke("stop_lsl_stream");
+  const handleStartStreaming = async () => {
+    if (!deviceConnected) {
+      console.error('Device is not connected.');
+      return;
+    }
+  
+    try {
+      await core.invoke('monitor_device_connection', { portName: portRef.current, stream_name: lslName });
+      setStreaming(true);
+      console.log('Started LSL streaming');
+    } catch (error) {
+      console.error('Failed to start streaming:', error);
+    }
+  };
+  
 
-  // Use `listen` to receive real-time updates
-  useEffect(() => {
-    const unlisten = listen<string>("stream-data", (event) => {
-      setStreamData((prevData) => [...prevData, event.payload]); // Append new data
-    });
 
-    // Clean up listener on unmount
-    return () => {
-      unlisten.then((dispose) => dispose());
-    };
-  }, []);
 
   return (
     <div>
-      <h1>LSL Connector</h1>
-      <button onClick={startStreaming} disabled={isStreaming}>
-        Start Streaming
-      </button>
-      <button onClick={stopStreaming} disabled={!isStreaming}>
-        Stop Streaming
-      </button>
       <div>
-        <h2>Stream Data:</h2>
-        <ul>
-          {streamData.map((data, index) => (
-            <li key={index}>{data}</li>
-          ))}
-        </ul>
+        <button onClick={handleConnectDevice}>Connect Device</button>
       </div>
+      <div>
+      </div>
+      <div>
+        <button onClick={handleStartStreaming} disabled={!deviceConnected || streaming}>
+          Start Streaming
+        </button>
+      </div>
+      {streaming && <p>Streaming data to LSL with name: {lslName}</p>}
     </div>
   );
 };
 
-export default Home;
+export default App;

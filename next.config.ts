@@ -1,7 +1,16 @@
+/** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    appDir: true, // This enables the new "App Router"
+  reactStrictMode: true,
+  images: {
+    unoptimized: true,
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "**",
+      },
+    ],
   },
+  output: "export",
 };
-
-module.exports = nextConfig;
+/* module.exports = nextConfig*/
+export default nextConfig;
