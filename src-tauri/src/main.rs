@@ -1,33 +1,64 @@
-use std::time::{Duration, Instant};
-use std::io::{self, Write, Read};
 use serialport;
+use std::io::{self, Read, Write};
 use std::thread;
+use std::time::{Duration, Instant};
 use tauri::{self, AppHandle, Emitter}; // Import Emitter along with AppHandle
 
-const PACKET_SIZE: usize = 16;
-const START_BYTE_1: u8 = 0xC7;
-const START_BYTE_2: u8 = 0x7C;
-const END_BYTE: u8 = 0x01;
+
+use lazy_static::lazy_static;
+use std::sync::{Arc, Mutex};
+lazy_static! {
+    static ref BAUDRATE: Arc<Mutex<u32>> = Arc::new(Mutex::new(230400)); // Default baud rate
+    static ref PACKET_SIZE: Arc<Mutex<usize>> = Arc::new(Mutex::new(16)); // Default baud rate
+    static ref CHANNELS: Arc<Mutex<usize>> = Arc::new(Mutex::new(6)); // Default baud rate
+    static ref SAMPLE_RATE: Arc<Mutex<f64>> = Arc::new(Mutex::new(500.0)); // Default baud rate
+}
+
 
 #[derive(Clone, serde::Serialize)]
 struct Payload {
     message: Vec<i16>,
+}
+fn print_type_of<T>(_: &T) {
+    println!("{}", std::any::type_name::<T>());
 }
 
 #[tauri::command]
 fn auto_detect_arduino() -> Result<String, String> {
     loop {
         let ports = serialport::available_ports().expect("No ports found!");
+        let baud_rate = *BAUDRATE.lock().unwrap(); // Lock and retrieve the current baud rate
 
         for port_info in ports {
             let port_name = port_info.port_name;
             println!("Attempting to connect to port: {}", port_name);
+            if let serialport::SerialPortType::UsbPort(info) = port_info.port_type {
+                println!(
+                    "Port: {} has VID: {:04X} and PID: {:04X}",
+                    port_name, info.vid, info.pid
+                );
+                print_type_of(&info.pid);
+                // Check if the VID and PID match your Arduino device
+                if info.vid == 6790 {//MAKER UNO
+                    *BAUDRATE.lock().unwrap() = 115200; // Change the baud rate dynamically
+                    *SAMPLE_RATE.lock().unwrap() = 250.0; 
+                } 
+                if info.pid == 67 {//Arduino UNO R3               {
+                    *SAMPLE_RATE.lock().unwrap() = 250.0; 
+                } 
+                if info.vid == 11914 {//Resberry pi pico
+                    *PACKET_SIZE.lock().unwrap() = 10; // Change the baud rate dynamically
+                    *CHANNELS.lock().unwrap() = 3; // Change the baud rate dynamically
+                } 
+            }
+            println!("baudrate: {} ", *BAUDRATE.lock().unwrap());
 
-            match serialport::new(&port_name, 230400)
-                .timeout(Duration::from_secs(1))
+            match serialport::new(&port_name, *BAUDRATE.lock().unwrap())
+                .timeout(Duration::from_secs(3))
                 .open()
             {
                 Ok(mut port) => {
+                    thread::sleep(Duration::from_secs(3)); // Allow Arduino to reset
                     let command = b"WHORU\n";
 
                     if let Err(e) = port.write_all(command) {
@@ -40,7 +71,7 @@ fn auto_detect_arduino() -> Result<String, String> {
                     let mut buffer: Vec<u8> = vec![0; 1024];
                     let mut response = String::new();
                     let start_time = Instant::now();
-                    let timeout = Duration::from_secs(2);
+                    let timeout = Duration::from_secs(10);
 
                     while start_time.elapsed() < timeout {
                         match port.read(&mut buffer) {
@@ -49,7 +80,12 @@ fn auto_detect_arduino() -> Result<String, String> {
                                     response.push_str(&String::from_utf8_lossy(&buffer[..size]));
                                     println!("Partial response: {}", response);
 
-                                    if response.contains("UNO-R4") || response.contains("UNO-R3") {
+                                    if response.contains("UNO-R4")
+                                        || response.contains("UNO-R3")
+                                        || response.contains("GIGA-R1")
+                                        || response.contains("RPI-PICO-RP2040")
+                                        || response.contains("UNO-CLONE")
+                                    {
                                         println!("Valid device found on port: {}", port_name);
                                         drop(port);
                                         return Ok(port_name); // Return the found port name directly
@@ -65,7 +101,7 @@ fn auto_detect_arduino() -> Result<String, String> {
                     }
 
                     println!("Final response from port {}: {}", port_name, response);
-                    
+
                     drop(port);
                 }
                 Err(e) => {
@@ -79,40 +115,57 @@ fn auto_detect_arduino() -> Result<String, String> {
     }
 }
 
-
 #[tauri::command]
 fn monitor_device_connection(port_name: String, app_handle: AppHandle) {
-    use lsl::{StreamOutlet, StreamInfo, Pushable};
-    use std::{io, sync::{Arc, Mutex}, thread, time::Duration};
+    use lsl::{Pushable, StreamInfo, StreamOutlet};
+    use std::{
+        io,
+        sync::{Arc, Mutex},
+        thread,
+        time::Duration,
+    };
 
     // Constants for packet handling
-    const PACKET_SIZE: usize = 16;
     const START_BYTE_1: u8 = 0xC7;
     const START_BYTE_2: u8 = 0x7C;
     const END_BYTE: u8 = 0x01;
 
     // Create an LSL stream
     let info = lsl::StreamInfo::new(
-        "UDL", "ECG", 7, 500.0, lsl::ChannelFormat::Int16, "unique_id_12345"
-    ).unwrap();
+        "UDL",
+        "Biopotential_Signals",
+        (*CHANNELS.lock().unwrap()).try_into().unwrap(),
+        *SAMPLE_RATE.lock().unwrap(),
+        lsl::ChannelFormat::Int16,
+        "unique_id_12345",
+    )
+    .unwrap();
 
     let outlet = Arc::new(Mutex::new(StreamOutlet::new(&info, 0, 360).unwrap()));
 
+    println!("{}gg", *SAMPLE_RATE.lock().unwrap());
 
     loop {
-        match serialport::new(&port_name, 230400)
-            .timeout(Duration::from_secs(5))
+        match serialport::new(&port_name, *BAUDRATE.lock().unwrap())
+            .timeout(Duration::from_secs(3))
             .open()
         {
             Ok(mut port) => {
+
                 println!("Connected to device on port: {}", port_name);
                 let start_command = b"START\r\n";
-                if let Err(e) = port.write_all(start_command) {
-                    println!("Failed to send START command: {:?}", e);
+ 
+                for i in 1..=3 {
+                    if let Err(e) = port.write_all(start_command) {
+                        println!("Failed to send START command (attempt {}): {:?}", i, e);
+                    } else {
+                        println!("START command sent (attempt {}).", i);
+                    }
+                    thread::sleep(Duration::from_millis(400)); // Optional: Delay between commands
                 }
-               
 
-                thread::sleep(Duration::from_millis(4));
+                println!("Finished sending commands.");
+
                 let mut buffer: Vec<u8> = vec![0; 1024];
                 let mut accumulated_buffer: Vec<u8> = Vec::new();
 
@@ -122,27 +175,37 @@ fn monitor_device_connection(port_name: String, app_handle: AppHandle) {
                             accumulated_buffer.extend_from_slice(&buffer[..size]);
 
                             // Process packets if we have enough bytes
-                            while accumulated_buffer.len() >= PACKET_SIZE {
-                                if accumulated_buffer[0] == START_BYTE_1 && accumulated_buffer[1] == START_BYTE_2 {
-                                    println!("working");
-                                    if accumulated_buffer[PACKET_SIZE - 1] == END_BYTE {
+                            while accumulated_buffer.len() >= *PACKET_SIZE.lock().unwrap() {
+                                if accumulated_buffer[0] == START_BYTE_1
+                                    && accumulated_buffer[1] == START_BYTE_2
+                                {
+                                    if accumulated_buffer[*PACKET_SIZE.lock().unwrap()  - 1] == END_BYTE {
                                         // Extract the packet
-                                        let packet = accumulated_buffer.drain(..PACKET_SIZE).collect::<Vec<u8>>();
+                                        let packet = accumulated_buffer
+                                            .drain(..*PACKET_SIZE.lock().unwrap())
+                                            .collect::<Vec<u8>>();
 
-                                        let counter = packet[2] as i16;
-                                        let data: Vec<i16> = (0..6).map(|i| {
-                                            let idx = 3 + (i * 2);
-                                            let high = packet[idx] as i16;
-                                            let low = packet[idx + 1] as i16;
-                                            (high << 8) | low
-                                        }).collect();
-                                        
+                                        let data: Vec<i16> = (0..*CHANNELS.lock().unwrap())
+                                            .map(|i| {
+                                                let idx = 3 + (i * 2);
+                                                let high = packet[idx] as i16;
+                                                let low = packet[idx + 1] as i16;
+                                                (high << 8) | low
+                                            })
+                                            .collect();
+
                                         let mut data = data;
-                                        data.push(counter);
                                         println!("{:?}", data);
 
                                         // Emit the data to the frontend
-                                        app_handle.emit("updateSerial", Payload { message: data.clone() }).unwrap();
+                                        app_handle
+                                            .emit(
+                                                "updateSerial",
+                                                Payload {
+                                                    message: data.clone(),
+                                                },
+                                            )
+                                            .unwrap();
 
                                         // Send the data to LSL
                                         if let Ok(outlet) = outlet.lock() {
@@ -150,7 +213,6 @@ fn monitor_device_connection(port_name: String, app_handle: AppHandle) {
                                                 println!("Failed to push data to LSL: {:?}", e);
                                             });
                                         }
-
                                     } else {
                                         accumulated_buffer.drain(..1); // Invalid end byte, skip the packet
                                     }
@@ -181,14 +243,16 @@ fn monitor_device_connection(port_name: String, app_handle: AppHandle) {
     }
 }
 
-
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![auto_detect_arduino, monitor_device_connection])
+        .invoke_handler(tauri::generate_handler![
+            auto_detect_arduino,
+            monitor_device_connection
+        ])
         .setup(|_app| {
             println!("Starting auto-detection of Arduino...");
             Ok(())
-        })        
+        })
         .run(tauri::generate_context!())
         .expect("Error while running Tauri application");
 }
