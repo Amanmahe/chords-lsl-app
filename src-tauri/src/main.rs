@@ -3,6 +3,10 @@ use std::io::{self, Read, Write};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{self, AppHandle, Emitter}; // Import Emitter along with AppHandle
+use serde_json::json; // Add this import at the top
+use tokio::sync::mpsc;
+use lsl::Pushable;  // Add the necessary imports
+use lsl::StreamOutlet;
 
 
 use lazy_static::lazy_static;
@@ -44,6 +48,9 @@ fn auto_detect_arduino() -> Result<String, String> {
                     *SAMPLE_RATE.lock().unwrap() = 250.0; 
                 } 
                 if info.pid == 67 {//Arduino UNO R3               {
+                    *SAMPLE_RATE.lock().unwrap() = 250.0; 
+                } 
+                if info.vid == 9025 {//Arduino genuino R3               {
                     *SAMPLE_RATE.lock().unwrap() = 250.0; 
                 } 
                 if info.vid == 11914 {//Resberry pi pico
@@ -116,22 +123,16 @@ fn auto_detect_arduino() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn monitor_device_connection(port_name: String, app_handle: AppHandle) {
-    use lsl::{Pushable, StreamInfo, StreamOutlet};
-    use std::{
-        io,
-        sync::{Arc, Mutex},
-        thread,
-        time::Duration,
-    };
-
-    // Constants for packet handling
+async fn monitor_device_connection(port_name: String, app_handle: AppHandle) {
     const START_BYTE_1: u8 = 0xC7;
     const START_BYTE_2: u8 = 0x7C;
     const END_BYTE: u8 = 0x01;
 
-    // Create an LSL stream
-    let info = lsl::StreamInfo::new(
+    // Create a channel for communication
+    let (tx, mut rx) = mpsc::channel::<Vec<i16>>(100);
+
+    // Create StreamInfo as before
+    let info = Arc::new(lsl::StreamInfo::new(
         "UDL",
         "Biopotential_Signals",
         (*CHANNELS.lock().unwrap()).try_into().unwrap(),
@@ -139,109 +140,139 @@ fn monitor_device_connection(port_name: String, app_handle: AppHandle) {
         lsl::ChannelFormat::Int16,
         "unique_id_12345",
     )
-    .unwrap();
+    .unwrap());
 
+    // Create StreamOutlet in the same thread
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<i16>>();
     let outlet = Arc::new(Mutex::new(StreamOutlet::new(&info, 0, 360).unwrap()));
-
+    
     println!("{}gg", *SAMPLE_RATE.lock().unwrap());
 
-    loop {
-        match serialport::new(&port_name, *BAUDRATE.lock().unwrap())
-            .timeout(Duration::from_secs(3))
-            .open()
-        {
-            Ok(mut port) => {
+    // Use spawn_blocking to handle the task in a separate thread
+    tokio::task::spawn_blocking(move || {
+        loop {
+            match serialport::new(&port_name, *BAUDRATE.lock().unwrap())
+                .timeout(Duration::from_secs(3))
+                .open()
+            {
+                Ok(mut port) => {
+                    println!("Connected to device on port: {}", port_name);
+                    let start_command = b"START\r\n";
 
-                println!("Connected to device on port: {}", port_name);
-                let start_command = b"START\r\n";
- 
-                for i in 1..=3 {
-                    if let Err(e) = port.write_all(start_command) {
-                        println!("Failed to send START command (attempt {}): {:?}", i, e);
-                    } else {
-                        println!("START command sent (attempt {}).", i);
+                    for i in 1..=3 {
+                        if let Err(e) = port.write_all(start_command) {
+                            println!("Failed to send START command (attempt {}): {:?}", i, e);
+                        } else {
+                            println!("START command sent (attempt {}).", i);
+                        }
+                        thread::sleep(Duration::from_millis(400));
                     }
-                    thread::sleep(Duration::from_millis(400)); // Optional: Delay between commands
-                }
 
-                println!("Finished sending commands.");
+                    println!("Finished sending commands.");
 
-                let mut buffer: Vec<u8> = vec![0; 1024];
-                let mut accumulated_buffer: Vec<u8> = Vec::new();
+                    let mut buffer: Vec<u8> = vec![0; 1024];
+                    let mut accumulated_buffer: Vec<u8> = Vec::new();
 
-                loop {
-                    match port.read(&mut buffer) {
-                        Ok(size) => {
-                            accumulated_buffer.extend_from_slice(&buffer[..size]);
+                    let mut packet_count = 0;
+                    let mut sample_count = 0;
+                    let mut byte_count = 0;
+                    let start_time = Instant::now();
+                    let mut last_print_time = Instant::now();
+                    packet_count += 1;
 
-                            // Process packets if we have enough bytes
-                            while accumulated_buffer.len() >= *PACKET_SIZE.lock().unwrap() {
-                                if accumulated_buffer[0] == START_BYTE_1
-                                    && accumulated_buffer[1] == START_BYTE_2
-                                {
-                                    if accumulated_buffer[*PACKET_SIZE.lock().unwrap()  - 1] == END_BYTE {
-                                        // Extract the packet
-                                        let packet = accumulated_buffer
-                                            .drain(..*PACKET_SIZE.lock().unwrap())
-                                            .collect::<Vec<u8>>();
+                    loop {
+                        match port.read(&mut buffer) {
+                            Ok(size) => {
+                                accumulated_buffer.extend_from_slice(&buffer[..size]);
+                                byte_count += size;
 
-                                        let data: Vec<i16> = (0..*CHANNELS.lock().unwrap())
-                                            .map(|i| {
-                                                let idx = 3 + (i * 2);
-                                                let high = packet[idx] as i16;
-                                                let low = packet[idx + 1] as i16;
-                                                (high << 8) | low
-                                            })
-                                            .collect();
+                                while accumulated_buffer.len() >= *PACKET_SIZE.lock().unwrap() {
+                                    if accumulated_buffer[0] == START_BYTE_1
+                                        && accumulated_buffer[1] == START_BYTE_2
+                                    {
+                                        if accumulated_buffer[*PACKET_SIZE.lock().unwrap() - 1] == END_BYTE {
+                                            let packet = accumulated_buffer
+                                                .drain(..*PACKET_SIZE.lock().unwrap())
+                                                .collect::<Vec<u8>>();
+                                            sample_count += 1;
+                                            let data: Vec<i16> = (0..*CHANNELS.lock().unwrap())
+                                                .map(|i| {
+                                                    let idx = 3 + (i * 2);
+                                                    let high = packet[idx] as i16;
+                                                    let low = packet[idx + 1] as i16;
+                                                    (high << 8) | low
+                                                })
+                                                .collect();
+                                            println!("Received raw data: {:?}", data);
 
-                                        let mut data = data;
-                                        println!("{:?}", data);
+                                            if tx.send(data).is_err() {
+                                                println!("Failed to send data to the main thread.");
+                                                break;
+                                            }
 
-                                        // Emit the data to the frontend
-                                        app_handle
-                                            .emit(
-                                                "updateSerial",
-                                                Payload {
-                                                    message: data.clone(),
-                                                },
-                                            )
-                                            .unwrap();
-
-                                        // Send the data to LSL
-                                        if let Ok(outlet) = outlet.lock() {
-                                            outlet.push_sample(&data).unwrap_or_else(|e| {
-                                                println!("Failed to push data to LSL: {:?}", e);
-                                            });
+                                        } else {
+                                            accumulated_buffer.drain(..1);
                                         }
                                     } else {
-                                        accumulated_buffer.drain(..1); // Invalid end byte, skip the packet
+                                        accumulated_buffer.drain(..1);
                                     }
-                                } else {
-                                    accumulated_buffer.drain(..1); // Invalid start bytes, skip
+                                }
+
+                                if last_print_time.elapsed() >= Duration::from_secs(1) {
+                                    let elapsed = start_time.elapsed().as_secs_f32();
+                                    let refresh_rate = format!("{:.2}", packet_count as f32 / elapsed);
+                                    let samples_per_second = format!("{:.2}", sample_count as f32 / elapsed);
+                                    let bytes_per_second = format!("{:.2}", byte_count as f32 / elapsed);
+                                    
+
+                                    app_handle
+                                        .emit(
+                                            "updatePerformance",
+                                            json!({
+                                                "refreshRate": refresh_rate,
+                                                "samplesPerSecond": samples_per_second,
+                                                "bytesPerSecond": bytes_per_second
+                                            }),
+                                        )
+                                        .unwrap_or_else(|e| {
+                                            println!("Failed to emit performance metrics: {:?}", e);
+                                        });
+
+                                    last_print_time = Instant::now();
                                 }
                             }
-                        }
-                        Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
-                            println!("Read timed out, retrying...");
-                            continue;
-                        }
-                        Err(e) => {
-                            println!("Error receiving data: {:?}", e);
-                            break; // Exit the loop on error
+                            Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
+                                println!("Read timed out, retrying...");
+                                continue;
+                            }
+                            Err(e) => {
+                                println!("Error receiving data: {:?}", e);
+                                break;
+                            }
                         }
                     }
                 }
+                Err(e) => {
+                    println!("Failed to connect to device on {}: {}", port_name, e);
+                    break;
+                }
             }
-            Err(e) => {
-                println!("Failed to connect to device on {}: {}", port_name, e);
-                break; // Exit the loop on error
-            }
-        }
 
-        println!("Device disconnected, checking for new devices...");
-        thread::sleep(Duration::from_secs(5)); // Wait before trying again
+            println!("Device disconnected, checking for new devices...");
+            thread::sleep(Duration::from_secs(5));
+        }
+    });
+    while let Ok(data) = rx.recv() {
+        if let Ok(outlet) = outlet.lock() {
+            outlet.push_sample(&data).unwrap_or_else(|e| {
+                println!("Failed to push data to LSL: {:?}", e);
+            });
+        }
     }
+    
 }
+
+
 
 fn main() {
     tauri::Builder::default()
@@ -250,7 +281,6 @@ fn main() {
             monitor_device_connection
         ])
         .setup(|_app| {
-            println!("Starting auto-detection of Arduino...");
             Ok(())
         })
         .run(tauri::generate_context!())
