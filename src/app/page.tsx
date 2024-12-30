@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from 'react';
+import React from 'react';
 import dynamic from 'next/dynamic';
 const ClientOnlyPage = dynamic(() => import('./main'), { ssr: false });
 

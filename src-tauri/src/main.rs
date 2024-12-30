@@ -19,29 +19,17 @@ lazy_static! {
 }
 
 
-#[derive(Clone, serde::Serialize)]
-struct Payload {
-    message: Vec<i16>,
-}
-fn print_type_of<T>(_: &T) {
-    println!("{}", std::any::type_name::<T>());
-}
+
 
 #[tauri::command]
-fn auto_detect_arduino() -> Result<String, String> {
+fn detect_arduino() -> Result<String, String> {
     loop {
         let ports = serialport::available_ports().expect("No ports found!");
-        let baud_rate = *BAUDRATE.lock().unwrap(); // Lock and retrieve the current baud rate
 
         for port_info in ports {
             let port_name = port_info.port_name;
             println!("Attempting to connect to port: {}", port_name);
             if let serialport::SerialPortType::UsbPort(info) = port_info.port_type {
-                println!(
-                    "Port: {} has VID: {:04X} and PID: {:04X}",
-                    port_name, info.vid, info.pid
-                );
-                print_type_of(&info.pid);
                 // Check if the VID and PID match your Arduino device
                 if info.vid == 6790 {//MAKER UNO
                     *BAUDRATE.lock().unwrap() = 115200; // Change the baud rate dynamically
@@ -58,7 +46,6 @@ fn auto_detect_arduino() -> Result<String, String> {
                     *CHANNELS.lock().unwrap() = 3; // Change the baud rate dynamically
                 } 
             }
-            println!("baudrate: {} ", *BAUDRATE.lock().unwrap());
 
             match serialport::new(&port_name, *BAUDRATE.lock().unwrap())
                 .timeout(Duration::from_secs(3))
@@ -73,7 +60,6 @@ fn auto_detect_arduino() -> Result<String, String> {
                         continue;
                     }
                     port.flush().expect("Failed to flush port");
-                    println!("Sending command...");
 
                     let mut buffer: Vec<u8> = vec![0; 1024];
                     let mut response = String::new();
@@ -123,7 +109,7 @@ fn auto_detect_arduino() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn monitor_device_connection(port_name: String, app_handle: AppHandle) {
+async fn start_streaming(port_name: String, app_handle: AppHandle) {
     const START_BYTE_1: u8 = 0xC7;
     const START_BYTE_2: u8 = 0x7C;
     const END_BYTE: u8 = 0x01;
@@ -146,7 +132,6 @@ async fn monitor_device_connection(port_name: String, app_handle: AppHandle) {
     let (tx, rx) = std::sync::mpsc::channel::<Vec<i16>>();
     let outlet = Arc::new(Mutex::new(StreamOutlet::new(&info, 0, 360).unwrap()));
     
-    println!("{}gg", *SAMPLE_RATE.lock().unwrap());
 
     // Use spawn_blocking to handle the task in a separate thread
     tokio::task::spawn_blocking(move || {
@@ -277,8 +262,8 @@ async fn monitor_device_connection(port_name: String, app_handle: AppHandle) {
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            auto_detect_arduino,
-            monitor_device_connection
+            detect_arduino,
+            start_streaming
         ])
         .setup(|_app| {
             Ok(())

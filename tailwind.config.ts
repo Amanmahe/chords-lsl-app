@@ -77,10 +77,23 @@ const config = {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
+        fadeIn: {
+          '0%': { opacity: '0', transform: 'translateY(-20px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        rotateShadow: {
+          '0%': { boxShadow: '8px 8px 16px #bebebe, -8px -8px 16px #ffffff' },
+          '25%': { boxShadow: '8px -8px 16px #bebebe, -8px 8px 16px #ffffff' },
+          '50%': { boxShadow: '-8px -8px 16px #bebebe, 8px 8px 16px #ffffff' },
+          '75%': { boxShadow: '-8px 8px 16px #bebebe, 8px -8px 16px #ffffff' },
+          '100%': { boxShadow: '8px 8px 16px #bebebe, -8px -8px 16px #ffffff' },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        fadeIn: "fadeIn 0.6s ease-in-out forwards",
+        rotateShadow: "rotateShadow 1.5s linear infinite",
       },
     },
   },
