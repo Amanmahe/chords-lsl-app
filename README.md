@@ -1,3 +1,5 @@
+# This repo has been moved to [Chords LSL Connector](https://github.com/upsidedownlabs/Chords-LSL-Connector)
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
