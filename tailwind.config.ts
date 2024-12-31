@@ -95,6 +95,12 @@ const config = {
         fadeIn: "fadeIn 0.6s ease-in-out forwards",
         rotateShadow: "rotateShadow 1.5s linear infinite",
       },
+      boxShadow: {
+        active: 'inset 4px 4px 8px #bebebe, inset -4px -4px 8px #ffffff',
+      },
+      scale: {
+        95: "0.95",
+      },
     },
   },
   plugins: [require("tailwindcss-animate")],

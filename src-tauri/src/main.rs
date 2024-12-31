@@ -25,20 +25,27 @@ lazy_static! {
 fn detect_arduino() -> Result<String, String> {
     loop {
         let ports = serialport::available_ports().expect("No ports found!");
+        println!("Attempting to connect to port: {:#?}", ports);
+
 
         for port_info in ports {
             let port_name = port_info.port_name;
             println!("Attempting to connect to port: {}", port_name);
+
+            if port_name.contains("BLTH") || port_name.contains("Bluetooth"){
+                continue;
+            }
             if let serialport::SerialPortType::UsbPort(info) = port_info.port_type {
                 // Check if the VID and PID match your Arduino device
                 if info.vid == 6790 {//MAKER UNO
                     *BAUDRATE.lock().unwrap() = 115200; // Change the baud rate dynamically
                     *SAMPLE_RATE.lock().unwrap() = 250.0; 
                 } 
-                if info.pid == 67 {//Arduino UNO R3               {
+                if info.pid == 67 {//Arduino UNO R3               
                     *SAMPLE_RATE.lock().unwrap() = 250.0; 
                 } 
-                if info.vid == 9025 {//Arduino genuino R3               {
+                if info.pid == 579
+                {//Arduino genuino R3               
                     *SAMPLE_RATE.lock().unwrap() = 250.0; 
                 } 
                 if info.vid == 11914 {//Resberry pi pico
@@ -124,7 +131,7 @@ async fn start_streaming(port_name: String, app_handle: AppHandle) {
         (*CHANNELS.lock().unwrap()).try_into().unwrap(),
         *SAMPLE_RATE.lock().unwrap(),
         lsl::ChannelFormat::Int16,
-        "unique_id_12345",
+        "Chords",
     )
     .unwrap());
 

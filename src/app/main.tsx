@@ -25,6 +25,15 @@ const App = () => {
       console.error('Failed to connect to device:', error);
     }
   };
+  const handleMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    if (target) {
+      target.classList.add("scale-95", "shadow-active");
+      setTimeout(() => {
+        target.classList.remove("scale-95", "shadow-active");
+      }, 100); // Adjust delay as needed
+    }
+  };
 
 
 
@@ -32,6 +41,8 @@ const App = () => {
     <div className="flex flex-col items-center justify-center h-screen bg-gray-200">
       <div
         onClick={handleConnectDevice}
+        onMouseDown={handleMouseDown}
+
         className={`
           flex items-center justify-center w-28 h-28 rounded-full cursor-pointer bg-gray-200 shadow-[8px_8px_16px_#bebebe,-8px_-8px_16px_#ffffff] 
           transition-all duration-600 relative ${isProcessing.current ? 'animate-[rotateShadow_1.5s_linear_infinite]' : ''}
